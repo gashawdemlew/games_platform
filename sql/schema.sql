@@ -1,0 +1,109 @@
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY,
+    username VARCHAR(50) NOT NULL UNIQUE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS games (
+    id UUID PRIMARY KEY,
+    session_code VARCHAR(32) NOT NULL UNIQUE,
+    admin_name VARCHAR(80) NOT NULL DEFAULT 'Admin',
+    status VARCHAR(20) NOT NULL,
+    currency VARCHAR(10) NOT NULL DEFAULT 'ETB',
+    contribution_amount DOUBLE PRECISION NOT NULL DEFAULT 100,
+    commission_percent DOUBLE PRECISION NOT NULL DEFAULT 15,
+    total_collected DOUBLE PRECISION NOT NULL DEFAULT 0,
+    commission_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    prize_pool_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    payout_per_winner DOUBLE PRECISION NOT NULL DEFAULT 0,
+    winner_count INTEGER NOT NULL DEFAULT 0,
+    winning_line_target INTEGER NOT NULL DEFAULT 1,
+    allowed_line_patterns JSONB NOT NULL DEFAULT '["horizontal","vertical","diagonal"]'::jsonb,
+    allow_full_house BOOLEAN NOT NULL DEFAULT TRUE,
+    drawn_numbers JSONB NOT NULL DEFAULT '[]'::jsonb,
+    winners JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMP NULL,
+    finished_at TIMESTAMP NULL
+);
+
+CREATE TABLE IF NOT EXISTS cards (
+    id UUID PRIMARY KEY,
+    game_id UUID NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    player_id VARCHAR(32) NOT NULL UNIQUE,
+    player_name VARCHAR(80) NOT NULL,
+    phone_number VARCHAR(30) NOT NULL,
+    numbers JSONB NOT NULL,
+    pattern VARCHAR(20) NULL,
+    winner BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT NOW();
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS session_code VARCHAR(32);
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS drawn_numbers JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS winners JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS admin_name VARCHAR(80) NOT NULL DEFAULT 'Admin';
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS currency VARCHAR(10) NOT NULL DEFAULT 'ETB';
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS contribution_amount DOUBLE PRECISION NOT NULL DEFAULT 100;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS commission_percent DOUBLE PRECISION NOT NULL DEFAULT 15;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS total_collected DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS commission_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS prize_pool_amount DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS payout_per_winner DOUBLE PRECISION NOT NULL DEFAULT 0;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS winner_count INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS winning_line_target INTEGER NOT NULL DEFAULT 1;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS allowed_line_patterns JSONB NOT NULL DEFAULT '["horizontal","vertical","diagonal"]'::jsonb;
+
+ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS allow_full_house BOOLEAN NOT NULL DEFAULT TRUE;
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS player_id VARCHAR(32);
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS player_name VARCHAR(80) NOT NULL DEFAULT 'Guest';
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30) NOT NULL DEFAULT '';
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS pattern VARCHAR(20);
+
+ALTER TABLE cards
+    ADD COLUMN IF NOT EXISTS winner BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE INDEX IF NOT EXISTS idx_cards_game_id ON cards(game_id);
+CREATE INDEX IF NOT EXISTS idx_cards_user_id ON cards(user_id);
+CREATE INDEX IF NOT EXISTS idx_games_session_code ON games(session_code);
+CREATE INDEX IF NOT EXISTS idx_cards_player_id ON cards(player_id);
