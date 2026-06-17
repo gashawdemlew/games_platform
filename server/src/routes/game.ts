@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { generateBingoCard } from "../services/bingoLogic.js";
 import { gameManager } from "../services/gameManager.js";
+import { isBrowserNavigation, sendSpaIndex } from "../spa.js";
 import type { LinePattern } from "../types.js";
 import { getAdminFromRequest } from "./auth.js";
 
@@ -63,13 +64,19 @@ export async function registerGameRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  app.get<{ Params: { game_id: string } }>("/game/:game_id", async (request) => {
+  app.get<{ Params: { game_id: string } }>("/game/:game_id", async (request, reply) => {
+    if (process.env.NODE_ENV === "production" && isBrowserNavigation(request.headers.accept)) {
+      return sendSpaIndex(reply);
+    }
     return gameManager.getGame(request.params.game_id);
   });
 
   app.get<{ Params: { game_id: string; player_id: string } }>(
     "/game/:game_id/player/:player_id",
-    async (request) => {
+    async (request, reply) => {
+      if (process.env.NODE_ENV === "production" && isBrowserNavigation(request.headers.accept)) {
+        return sendSpaIndex(reply);
+      }
       return gameManager.getPlayerSnapshot(request.params.game_id, request.params.player_id);
     },
   );

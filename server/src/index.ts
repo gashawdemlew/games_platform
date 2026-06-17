@@ -32,6 +32,13 @@ async function buildServer() {
 
   await app.register(websocket);
 
+  if (process.env.NODE_ENV === "production") {
+    await app.register(fastifyStatic, {
+      root: clientDist,
+      prefix: "/",
+    });
+  }
+
   app.get("/health", async () => ({
     status: "ok",
     database_url: getDatabaseUrl(),
@@ -109,11 +116,6 @@ async function buildServer() {
   );
 
   if (process.env.NODE_ENV === "production") {
-    await app.register(fastifyStatic, {
-      root: clientDist,
-      prefix: "/",
-    });
-
     app.setNotFoundHandler((request, reply) => {
       if (request.method !== "GET" || request.url.startsWith("/ws")) {
         reply.status(404).send({ detail: "Not found" });
