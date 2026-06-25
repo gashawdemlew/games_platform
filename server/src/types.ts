@@ -12,6 +12,9 @@ export interface BingoCard {
   grid: CardCell[][];
 }
 
+export type RegistrationStatus = "pending" | "approved" | "rejected";
+export type PaymentMethod = "cash" | "transfer";
+
 export interface PlayerState {
   player_id: string;
   player_name: string;
@@ -19,6 +22,10 @@ export interface PlayerState {
   card: BingoCard;
   winner: boolean;
   pattern: string | null;
+  profile_id: string | null;
+  registration_status: RegistrationStatus;
+  payment_method: PaymentMethod;
+  receipt_data: string | null;
 }
 
 export interface PlayerSummary {
@@ -27,6 +34,19 @@ export interface PlayerSummary {
   phone_number: string;
   winner: boolean;
   pattern: string | null;
+  profile_id: string | null;
+  registration_status: RegistrationStatus;
+  payment_method: PaymentMethod;
+  has_receipt: boolean;
+  receipt_data: string | null;
+}
+
+export interface PlayerProfile {
+  id: string;
+  full_name: string;
+  phone_number: string;
+  created_at: Date;
+  updated_at: Date;
 }
 
 export interface WinnerInfo {

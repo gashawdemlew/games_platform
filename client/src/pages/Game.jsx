@@ -5,16 +5,18 @@ import BingoCard from "../components/BingoCard";
 import DrawnNumbers from "../components/DrawnNumbers";
 import FinanceSummary from "../components/FinanceSummary";
 import PlayerRoster from "../components/PlayerRoster";
+import PublicJoinLink from "../components/PublicJoinLink";
 import StatusPanel from "../components/StatusPanel";
 import {
   clearAdminSession,
+  approveRegistration,
   createAdminUser,
   getAdminAnalytics,
   getAdminProfile,
   getAdminUsers,
   getGame,
   getPlayerSnapshot,
-  registerPlayer,
+  rejectRegistration,
   startGame,
   updateAdminUser,
   updateGameSettings,
@@ -82,8 +84,6 @@ function Game() {
     }
   );
   const [analytics, setAnalytics] = useState(null);
-  const [newPlayerName, setNewPlayerName] = useState("");
-  const [newPlayerPhone, setNewPlayerPhone] = useState("");
   const [contributionAmount, setContributionAmount] = useState(finance.contribution_amount);
   const [commissionPercent, setCommissionPercent] = useState(finance.commission_percent);
   const [winningLineTarget, setWinningLineTarget] = useState(1);
@@ -99,6 +99,9 @@ function Game() {
   const [adminUsers, setAdminUsers] = useState([]);
   const [creatingAdminUser, setCreatingAdminUser] = useState(false);
   const [savingAdminUserId, setSavingAdminUserId] = useState("");
+  const [approvingId, setApprovingId] = useState("");
+  const [rejectingId, setRejectingId] = useState("");
+  const [receiptPreview, setReceiptPreview] = useState(null);
   const [newAdminUsername, setNewAdminUsername] = useState("");
   const [newAdminDisplayName, setNewAdminDisplayName] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
@@ -331,34 +334,39 @@ function Game() {
     };
   }, [gameId, isAdmin, linkExpired, playerId]);
 
-  async function handleRegisterPlayer() {
-    if (!newPlayerName.trim() || !newPlayerPhone.trim()) {
-      setError("Enter both player name and phone number before registering.");
-      return;
-    }
-
+  async function handleApproveRegistration(targetPlayerId) {
     try {
+      setApprovingId(targetPlayerId);
       setError("");
-      const response = await registerPlayer(gameId, newPlayerName.trim(), newPlayerPhone.trim());
-      setPlayers((currentPlayers) => [
-        ...currentPlayers,
-        {
-          player_id: response.player_id,
-          player_name: response.player_name,
-          phone_number: response.phone_number,
-          winner: false,
-          pattern: null,
-        },
-      ]);
-      setPlayerCount((count) => count + 1);
-      setFinance((currentFinance) => ({
-        ...currentFinance,
-        total_collected: (playerCount + 1) * Number(currentFinance.contribution_amount),
-      }));
-      setNewPlayerName("");
-      setNewPlayerPhone("");
+      const response = await approveRegistration(gameId, targetPlayerId, adminId);
+      setPlayers(response.players);
+      setPlayerCount(response.approved_count ?? response.player_count);
+      setFinance(response.finance);
     } catch (requestError) {
       setError(requestError.message);
+    } finally {
+      setApprovingId("");
+    }
+  }
+
+  async function handleRejectRegistration(targetPlayerId) {
+    try {
+      setRejectingId(targetPlayerId);
+      setError("");
+      const response = await rejectRegistration(gameId, targetPlayerId, adminId);
+      setPlayers(response.players);
+      setFinance(response.finance);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setRejectingId("");
+    }
+  }
+
+  function handleViewReceipt(targetPlayerId) {
+    const player = players.find((item) => item.player_id === targetPlayerId);
+    if (player?.receipt_data) {
+      setReceiptPreview(player.receipt_data);
     }
   }
 
@@ -470,8 +478,8 @@ function Game() {
             <p className="meta-line">This shared card link is inactive because the game has already ended.</p>
           </div>
           <div className="status-main">
-            <button className="ghost-button" onClick={() => navigate("/")}>
-              Back to Home
+            <button className="ghost-button" onClick={() => navigate("/play")}>
+              Register for Next Game
             </button>
           </div>
         </section>
@@ -594,15 +602,25 @@ function Game() {
 
                 <FinanceSummary finance={finance} winnerCount={winnerCount} />
 
+                <PublicJoinLink gameId={gameId} origin={origin} disabled={status !== "waiting"} />
+
                 <PlayerRoster
                   gameId={gameId}
                   players={players}
                   origin={origin}
                   onStart={handleStartGame}
                   onOpenCard={handleOpenCard}
-                  canStart={status === "waiting" && players.length > 0}
+                  onApprove={handleApproveRegistration}
+                  onReject={handleRejectRegistration}
+                  onViewReceipt={handleViewReceipt}
+                  canStart={
+                    status === "waiting" &&
+                    players.some((player) => player.registration_status === "approved")
+                  }
                   starting={starting}
                   shareEnabled={status !== "finished"}
+                  approvingId={approvingId}
+                  rejectingId={rejectingId}
                 />
               </>
             ) : null}
@@ -734,33 +752,7 @@ function Game() {
                 >
                   {savingSettings ? "Saving..." : "Save Game Settings"}
                 </button>
-                <div className="admin-form-grid">
-                  <label>
-                    Player name
-                    <input
-                      value={newPlayerName}
-                      onChange={(event) => setNewPlayerName(event.target.value)}
-                      placeholder="Player name"
-                      disabled={status !== "waiting"}
-                    />
-                  </label>
-                  <label>
-                    Phone number
-                    <input
-                      value={newPlayerPhone}
-                      onChange={(event) => setNewPlayerPhone(event.target.value)}
-                      placeholder="09..., +251..."
-                      disabled={status !== "waiting"}
-                    />
-                  </label>
-                </div>
-                <button
-                  className="secondary-button"
-                  onClick={handleRegisterPlayer}
-                  disabled={status !== "waiting"}
-                >
-                  Register Player and Deal Card
-                </button>
+                <p className="mini-meta">Winner pattern and entry fee settings for the current lobby.</p>
               </section>
             ) : null}
 
@@ -865,6 +857,24 @@ function Game() {
         )}
         <DrawnNumbers numbers={drawnNumbers} />
       </section>
+
+      {receiptPreview ? (
+        <section className="panel">
+          <div className="panel-heading">
+            <h3>Payment Receipt</h3>
+            <button className="ghost-button" onClick={() => setReceiptPreview(null)}>
+              Close
+            </button>
+          </div>
+          {receiptPreview.startsWith("data:application/pdf") ? (
+            <a href={receiptPreview} target="_blank" rel="noreferrer">
+              Open PDF receipt
+            </a>
+          ) : (
+            <img src={receiptPreview} alt="Payment receipt" style={{ maxWidth: "100%", borderRadius: "12px" }} />
+          )}
+        </section>
+      ) : null}
     </main>
   );
 }

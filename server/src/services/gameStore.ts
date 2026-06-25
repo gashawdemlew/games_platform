@@ -30,6 +30,10 @@ interface CardRow {
   numbers: BingoCard;
   winner: boolean;
   pattern: string | null;
+  profile_id: string | null;
+  registration_status: string | null;
+  payment_method: string | null;
+  receipt_data: string | null;
 }
 
 function allNumbers(): number[] {
@@ -58,7 +62,8 @@ export async function loadGameFromDb(gameId: string): Promise<GameState | null> 
   if (!row) return null;
 
   const cardsResult = await pool.query<CardRow>(
-    `SELECT player_id, player_name, phone_number, numbers, winner, pattern
+    `SELECT player_id, player_name, phone_number, numbers, winner, pattern,
+            profile_id, registration_status, payment_method, receipt_data
      FROM cards WHERE game_id = $1`,
     [row.id],
   );
@@ -72,6 +77,10 @@ export async function loadGameFromDb(gameId: string): Promise<GameState | null> 
       card: card.numbers,
       winner: card.winner,
       pattern: card.pattern,
+      profile_id: card.profile_id,
+      registration_status: (card.registration_status ?? "approved") as PlayerState["registration_status"],
+      payment_method: (card.payment_method ?? "cash") as PlayerState["payment_method"],
+      receipt_data: card.receipt_data,
     };
   }
 
@@ -125,4 +134,13 @@ export async function loadRecoverableGames(): Promise<GameState[]> {
 
 export function createInitialRemainingNumbers(): number[] {
   return generateDrawSequence();
+}
+
+export async function loadOpenLobbyGame(): Promise<GameState | null> {
+  const result = await pool.query<{ session_code: string }>(
+    `SELECT session_code FROM games WHERE status = 'waiting' ORDER BY created_at DESC LIMIT 1`,
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return loadGameFromDb(row.session_code);
 }

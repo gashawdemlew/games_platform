@@ -142,6 +142,14 @@ export async function initDb(): Promise<void> {
       is_active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMP NOT NULL DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS player_profiles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      full_name VARCHAR(80) NOT NULL,
+      phone_number VARCHAR(30) NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+    );
   `);
 
   await pool.query(`
@@ -170,6 +178,12 @@ export async function initDb(): Promise<void> {
     ALTER TABLE cards ADD COLUMN IF NOT EXISTS phone_number VARCHAR(30) NOT NULL DEFAULT '';
     ALTER TABLE cards ADD COLUMN IF NOT EXISTS pattern VARCHAR(20);
     ALTER TABLE cards ADD COLUMN IF NOT EXISTS winner BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE cards ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES player_profiles(id) ON DELETE SET NULL;
+    ALTER TABLE cards ADD COLUMN IF NOT EXISTS registration_status VARCHAR(20) NOT NULL DEFAULT 'approved';
+    ALTER TABLE cards ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20) NOT NULL DEFAULT 'cash';
+    ALTER TABLE cards ADD COLUMN IF NOT EXISTS receipt_data TEXT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_game_profile ON cards(game_id, profile_id) WHERE profile_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_player_profiles_phone ON player_profiles(phone_number);
   `);
 
   await ensureDefaultAdmin();

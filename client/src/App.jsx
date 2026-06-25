@@ -3,6 +3,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Home from "./pages/Home";
 import Game from "./pages/Game";
 import Login from "./pages/Login";
+import Play from "./pages/Play";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           </ProtectedRoute>
         }
       />
+      <Route path="/play" element={<Play />} />
       <Route path="/game/:gameId" element={<Game />} />
     </Routes>
   );

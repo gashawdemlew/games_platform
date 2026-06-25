@@ -6,6 +6,7 @@ import Fastify from "fastify";
 import { getDatabaseUrl, initDb } from "./db.js";
 import { registerAuthRoutes } from "./routes/auth.js";
 import { registerGameRoutes } from "./routes/game.js";
+import { registerPlayerRoutes } from "./routes/player.js";
 import { gameManager } from "./services/gameManager.js";
 
 const PORT = Number(process.env.PORT ?? "8088");
@@ -46,6 +47,7 @@ async function buildServer() {
 
   await registerAuthRoutes(app);
   await registerGameRoutes(app);
+  await registerPlayerRoutes(app);
 
   app.get<{ Params: { game_id: string }; Querystring: { player_id: string } }>(
     "/ws/game/:game_id",
@@ -71,6 +73,11 @@ async function buildServer() {
       const game = gameManager.games.get(gameId);
       if (!game) {
         socket.close(1008, "Game not found");
+        return;
+      }
+
+      if (player.registration_status !== "approved") {
+        socket.close(1008, "Registration not approved");
         return;
       }
 

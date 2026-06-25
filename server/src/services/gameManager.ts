@@ -6,13 +6,16 @@ import type {
   GameRecordRow,
   GameState,
   LinePattern,
+  PaymentMethod,
   PlayerState,
   PlayerSummary,
+  RegistrationStatus,
   WinnerInfo,
 } from "../types.js";
 import { ConnectionManager } from "../websocket/connectionManager.js";
 import { checkWin, generateBingoCard, markCard } from "./bingoLogic.js";
-import { createInitialRemainingNumbers, loadGameFromDb, loadRecoverableGames } from "./gameStore.js";
+import { createInitialRemainingNumbers, loadGameFromDb, loadRecoverableGames, loadOpenLobbyGame } from "./gameStore.js";
+import { getPlayerProfile } from "./playerProfileService.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,6 +27,10 @@ function roundMoney(value: number): number {
 
 function shortId(): string {
   return randomUUID().replace(/-/g, "").slice(0, 8);
+}
+
+function approvedPlayers(game: GameState): PlayerState[] {
+  return Object.values(game.players).filter((player) => player.registration_status === "approved");
 }
 
 class AsyncLock {
@@ -165,6 +172,200 @@ export class GameManager {
     return this.getGame(gameId);
   }
 
+  async selfRegisterPlayer(
+    gameId: string,
+    profileId: string,
+    paymentMethod: PaymentMethod,
+    receiptData: string | null,
+  ) {
+    const profile = await getPlayerProfile(profileId);
+    if (!profile) {
+      throw Object.assign(new Error("Player profile not found"), { statusCode: 404 });
+    }
+
+    if (paymentMethod === "transfer" && !receiptData) {
+      // Receipt is optional; admin verifies payment manually for cash or transfer without upload.
+    }
+
+    let game!: GameState;
+    let player!: PlayerState;
+
+    await this.lock.run(async () => {
+      game = await this.resolveGame(gameId);
+      if (game.status !== "waiting") {
+        throw Object.assign(new Error("Registration is closed for this game"), { statusCode: 400 });
+      }
+
+      const existing = Object.values(game.players).find((item) => item.profile_id === profileId);
+      if (existing) {
+        throw Object.assign(new Error("You are already registered for this game"), { statusCode: 400 });
+      }
+
+      const playerId = shortId();
+      player = {
+        player_id: playerId,
+        player_name: profile.full_name,
+        phone_number: profile.phone_number,
+        card: generateBingoCard(),
+        winner: false,
+        pattern: null,
+        profile_id: profileId,
+        registration_status: "pending",
+        payment_method: paymentMethod,
+        receipt_data: receiptData,
+      };
+      game.players[playerId] = player;
+      await this.createPlayerRecord(
+        gameId,
+        playerId,
+        profile.full_name,
+        profile.phone_number,
+        player.card,
+        profileId,
+        "pending",
+        paymentMethod,
+        receiptData,
+      );
+      await this.syncGameState(game);
+    });
+
+    await this.connectionManager.broadcast(gameId, {
+      type: "registration_pending",
+      player_count: Object.keys(game.players).length,
+      players: this.serializePlayers(game),
+    });
+
+    return {
+      game_id: gameId,
+      status: game.status,
+      player_id: player.player_id,
+      player_name: player.player_name,
+      phone_number: player.phone_number,
+      card: player.card,
+      registration_status: player.registration_status,
+      payment_method: player.payment_method,
+      message: "Registration submitted. Wait for admin payment approval.",
+    };
+  }
+
+  async approveRegistration(gameId: string, playerId: string, adminId: string) {
+    await this.lock.run(async () => {
+      const game = await this.resolveGame(gameId);
+      if (game.admin_id !== adminId) {
+        throw Object.assign(new Error("Only the admin can approve registrations"), { statusCode: 403 });
+      }
+      if (game.status !== "waiting") {
+        throw Object.assign(new Error("Registrations can only be approved before the game starts"), {
+          statusCode: 400,
+        });
+      }
+      const player = game.players[playerId];
+      if (!player) {
+        throw Object.assign(new Error("Registration not found"), { statusCode: 404 });
+      }
+      if (player.registration_status !== "pending") {
+        throw Object.assign(new Error("Only pending registrations can be approved"), { statusCode: 400 });
+      }
+      player.registration_status = "approved";
+      await this.syncPlayerState(player);
+      await this.syncGameState(game);
+    });
+
+    const game = await this.resolveGame(gameId);
+    await this.connectionManager.broadcast(gameId, {
+      type: "player_joined",
+      player_count: approvedPlayers(game).length,
+      players: this.serializePlayers(game),
+    });
+    return this.getGame(gameId);
+  }
+
+  async rejectRegistration(gameId: string, playerId: string, adminId: string) {
+    await this.lock.run(async () => {
+      const game = await this.resolveGame(gameId);
+      if (game.admin_id !== adminId) {
+        throw Object.assign(new Error("Only the admin can reject registrations"), { statusCode: 403 });
+      }
+      if (game.status !== "waiting") {
+        throw Object.assign(new Error("Registrations can only be rejected before the game starts"), {
+          statusCode: 400,
+        });
+      }
+      const player = game.players[playerId];
+      if (!player) {
+        throw Object.assign(new Error("Registration not found"), { statusCode: 404 });
+      }
+      if (player.registration_status !== "pending") {
+        throw Object.assign(new Error("Only pending registrations can be rejected"), { statusCode: 400 });
+      }
+      player.registration_status = "rejected";
+      await this.syncPlayerState(player);
+      await this.syncGameState(game);
+    });
+
+    const game = await this.resolveGame(gameId);
+    await this.connectionManager.broadcast(gameId, {
+      type: "registration_rejected",
+      players: this.serializePlayers(game),
+    });
+    return this.getGame(gameId);
+  }
+
+  async getOpenLobby() {
+    const game = await loadOpenLobbyGame();
+    if (!game) {
+      return { open: false, game: null };
+    }
+    this.games.set(game.game_id, game);
+    return {
+      open: true,
+      game: await this.getGame(game.game_id),
+      public_player_url: "/play",
+    };
+  }
+
+  async getRegistrationForProfile(gameId: string, profileId: string) {
+    const game = await this.resolveGame(gameId);
+    const player = Object.values(game.players).find((item) => item.profile_id === profileId);
+    if (!player) {
+      return { registered: false, game_id: gameId, status: game.status };
+    }
+    return {
+      registered: true,
+      game_id: gameId,
+      status: game.status,
+      player_id: player.player_id,
+      player_name: player.player_name,
+      phone_number: player.phone_number,
+      registration_status: player.registration_status,
+      payment_method: player.payment_method,
+      card: player.registration_status === "rejected" ? null : player.card,
+      finance: this.buildFinance(game),
+      drawn_numbers: game.drawn_numbers,
+      winners: game.winners,
+    };
+  }
+
+  async syncProfileToWaitingRegistrations(profileId: string, fullName: string, phoneNumber: string) {
+    await pool.query(
+      `UPDATE cards SET player_name = $2, phone_number = $3, updated_at = NOW()
+       WHERE profile_id = $1
+         AND game_id IN (SELECT id FROM games WHERE status = 'waiting')`,
+      [profileId, fullName, phoneNumber],
+    );
+
+    for (const game of this.games.values()) {
+      if (game.status !== "waiting") continue;
+      for (const player of Object.values(game.players)) {
+        if (player.profile_id === profileId) {
+          player.player_name = fullName;
+          player.phone_number = phoneNumber;
+        }
+      }
+    }
+  }
+
+  /** @deprecated Admin desk registration replaced by player self-registration */
   async registerPlayer(gameId: string, playerName: string, phoneNumber: string) {
     let game!: GameState;
     let player!: PlayerState;
@@ -195,6 +396,10 @@ export class GameManager {
         card: generateBingoCard(),
         winner: false,
         pattern: null,
+        profile_id: null,
+        registration_status: "approved",
+        payment_method: "cash",
+        receipt_data: null,
       };
       game.players[playerId] = player;
       await this.createPlayerRecord(gameId, playerId, playerName, phoneNumber, player.card);
@@ -231,8 +436,8 @@ export class GameManager {
       if (game.status !== "waiting") {
         throw Object.assign(new Error("Game has already started"), { statusCode: 400 });
       }
-      if (Object.keys(game.players).length === 0) {
-        throw Object.assign(new Error("Register at least one player before starting"), {
+      if (approvedPlayers(game).length === 0) {
+        throw Object.assign(new Error("Approve at least one player registration before starting"), {
           statusCode: 400,
         });
       }
@@ -243,6 +448,7 @@ export class GameManager {
 
   async getGame(gameId: string) {
     const game = await this.resolveGame(gameId);
+    const approved = approvedPlayers(game);
     return {
       game_id: game.game_id,
       admin_id: game.admin_id,
@@ -252,7 +458,9 @@ export class GameManager {
       draw_interval_seconds: game.draw_interval_seconds,
       drawn_numbers: game.drawn_numbers,
       winners: game.winners,
-      player_count: Object.keys(game.players).length,
+      player_count: approved.length,
+      pending_count: Object.values(game.players).filter((p) => p.registration_status === "pending").length,
+      approved_count: approved.length,
       players: this.serializePlayers(game),
       finance: this.buildFinance(game, game.winners.length || undefined),
       winning_line_target: game.winning_line_target,
@@ -260,6 +468,7 @@ export class GameManager {
       allow_full_house: game.allow_full_house,
       started_at: game.started_at,
       finished_at: game.finished_at,
+      public_join_url: `/play?gameId=${game.game_id}`,
     };
   }
 
@@ -274,6 +483,16 @@ export class GameManager {
     if (!player) {
       throw Object.assign(new Error("Player not found"), { statusCode: 404 });
     }
+    if (player.registration_status !== "approved") {
+      throw Object.assign(
+        new Error(
+          player.registration_status === "pending"
+            ? "Your registration is waiting for admin payment approval"
+            : "Your registration was not approved for this game",
+        ),
+        { statusCode: 403 },
+      );
+    }
 
     return {
       game_id: game.game_id,
@@ -284,7 +503,7 @@ export class GameManager {
       draw_interval_seconds: game.draw_interval_seconds,
       drawn_numbers: game.drawn_numbers,
       winners: game.winners,
-      player_count: Object.keys(game.players).length,
+      player_count: approvedPlayers(game).length,
       player,
       finance: this.buildFinance(game, game.winners.length || undefined),
     };
@@ -466,7 +685,7 @@ export class GameManager {
         await this.connectionManager.broadcast(gameId, {
           type: "countdown",
           countdown: game.countdown,
-          player_count: Object.keys(game.players).length,
+          player_count: approvedPlayers(game).length,
         });
         await sleep(1000);
         game.countdown -= 1;
@@ -490,7 +709,7 @@ export class GameManager {
       game.drawn_numbers.push(number);
 
       const newWinners: WinnerInfo[] = [];
-      for (const player of Object.values(game.players)) {
+      for (const player of approvedPlayers(game)) {
         markCard(player.card, number);
         const result = checkWin(
           player.card,
@@ -581,11 +800,17 @@ export class GameManager {
       phone_number: player.phone_number,
       winner: player.winner,
       pattern: player.pattern,
+      profile_id: player.profile_id,
+      registration_status: player.registration_status,
+      payment_method: player.payment_method,
+      has_receipt: Boolean(player.receipt_data),
+      receipt_data: player.receipt_data,
     }));
   }
 
   buildFinance(game: GameState, winnerCount?: number): GameFinance {
-    const totalCollected = roundMoney(Object.keys(game.players).length * game.contribution_amount);
+    const approvedCount = approvedPlayers(game).length;
+    const totalCollected = roundMoney(approvedCount * game.contribution_amount);
     const commissionAmount = roundMoney(totalCollected * (game.commission_percent / 100));
     const prizePoolAmount = roundMoney(totalCollected - commissionAmount);
     const payoutPerWinner =
@@ -656,6 +881,10 @@ export class GameManager {
     playerName: string,
     phoneNumber: string,
     card: unknown,
+    profileId: string | null = null,
+    registrationStatus: RegistrationStatus = "approved",
+    paymentMethod: PaymentMethod = "cash",
+    receiptData: string | null = null,
   ) {
     const gameResult = await pool.query<{ id: string }>(
       "SELECT id FROM games WHERE session_code = $1",
@@ -674,9 +903,23 @@ export class GameManager {
 
     const cardId = randomUUID();
     await pool.query(
-      `INSERT INTO cards (id, game_id, user_id, player_id, player_name, phone_number, numbers, winner)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)`,
-      [cardId, game.id, userId, playerId, playerName, phoneNumber, JSON.stringify(card)],
+      `INSERT INTO cards (
+        id, game_id, user_id, player_id, player_name, phone_number, numbers, winner,
+        profile_id, registration_status, payment_method, receipt_data
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE, $8, $9, $10, $11)`,
+      [
+        cardId,
+        game.id,
+        userId,
+        playerId,
+        playerName,
+        phoneNumber,
+        JSON.stringify(card),
+        profileId,
+        registrationStatus,
+        paymentMethod,
+        receiptData,
+      ],
     );
   }
 
@@ -735,7 +978,8 @@ export class GameManager {
 
   private async syncPlayerState(player: PlayerState): Promise<void> {
     await pool.query(
-      `UPDATE cards SET numbers = $2, player_name = $3, phone_number = $4, winner = $5, pattern = $6, updated_at = NOW()
+      `UPDATE cards SET numbers = $2, player_name = $3, phone_number = $4, winner = $5, pattern = $6,
+        registration_status = $7, payment_method = $8, receipt_data = $9, updated_at = NOW()
        WHERE player_id = $1`,
       [
         player.player_id,
@@ -744,6 +988,9 @@ export class GameManager {
         player.phone_number,
         player.winner,
         player.pattern,
+        player.registration_status,
+        player.payment_method,
+        player.receipt_data,
       ],
     );
   }

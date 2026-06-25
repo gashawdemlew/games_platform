@@ -14,9 +14,24 @@ export default defineConfig({
       "/create-game": { target: API_TARGET, changeOrigin: true },
       "/admin": { target: API_TARGET, changeOrigin: true },
       "/card": { target: API_TARGET, changeOrigin: true },
-      "^/game/[^/]+/(players|settings|start)": { target: API_TARGET, changeOrigin: true },
+      "/players": { target: API_TARGET, changeOrigin: true },
+      "/lobby": { target: API_TARGET, changeOrigin: true },
+      "^/game/[^/]+/(players|settings|start|self-register|registration|registrations)": {
+        target: API_TARGET,
+        changeOrigin: true,
+      },
       "^/game/[^/]+/player/": { target: API_TARGET, changeOrigin: true },
       "^/game/[^/]+$": {
+        target: API_TARGET,
+        changeOrigin: true,
+        bypass(req) {
+          const accept = req.headers.accept ?? "";
+          if (accept.includes("text/html")) {
+            return req.url;
+          }
+        },
+      },
+      "^/play": {
         target: API_TARGET,
         changeOrigin: true,
         bypass(req) {
